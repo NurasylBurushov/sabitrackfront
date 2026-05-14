@@ -11,6 +11,7 @@ struct SideSelectionView: View {
     @State private var priceRange: ClosedRange<Double> = 0...50000
     @State private var selectedRating: Double = 0
     @State private var nannies: [Nanny] = []
+    @State private var loadError: String?
     
     // ✅ Правильный способ закрытия экрана
     @Environment(\.dismiss) var dismiss
@@ -137,6 +138,14 @@ struct SideSelectionView: View {
             }
             .navigationBarHidden(true)
             .onAppear { loadNannies() }
+            .alert("Ошибка загрузки нянь", isPresented: Binding(
+                get: { loadError != nil },
+                set: { if !$0 { loadError = nil } }
+            )) {
+                Button("OK", role: .cancel) { loadError = nil }
+            } message: {
+                Text(loadError ?? "")
+            }
         }
     }
     
@@ -218,11 +227,18 @@ struct SideSelectionView: View {
     
     func loadNannies() {
         Task {
+            await MainActor.run { loadError = nil }
             do {
                 let list = try await NetworkService.shared.fetchNannies(filter: nil, search: nil)
-                await MainActor.run { nannies = list }
+                await MainActor.run {
+                    nannies = list
+                    loadError = nil
+                }
             } catch {
-                await MainActor.run { nannies = [] }
+                await MainActor.run {
+                    nannies = []
+                    loadError = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
+                }
             }
         }
     }

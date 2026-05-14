@@ -285,6 +285,26 @@ struct NannyListResponse: Decodable {
         case nannies, total, page
         case perPage = "per_page"
     }
+    
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        nannies = (try? c.decode([Nanny].self, forKey: .nannies)) ?? []
+        page = (try? c.decode(Int.self, forKey: .page)) ?? 1
+        if let pp = try? c.decode(Int.self, forKey: .perPage) {
+            perPage = pp
+        } else if let ppd = try? c.decode(Double.self, forKey: .perPage) {
+            perPage = Int(ppd)
+        } else {
+            perPage = 20
+        }
+        if let t = try? c.decode(Int.self, forKey: .total) {
+            total = t
+        } else if let td = try? c.decode(Double.self, forKey: .total) {
+            total = Int(td)
+        } else {
+            total = nannies.count
+        }
+    }
 }
 
 struct ChatListItem: Decodable {
@@ -359,7 +379,9 @@ struct Nanny: Decodable, Identifiable {
         } else {
             id = try c.decode(String.self, forKey: .legacyId)
         }
-        name = try c.decode(String.self, forKey: .name)
+        let rawName = try c.decodeIfPresent(String.self, forKey: .name)
+        let trimmed = rawName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        name = trimmed.isEmpty ? "Няня" : trimmed
         avatar = try c.decodeIfPresent(String.self, forKey: .avatar_url)
             ?? c.decodeIfPresent(String.self, forKey: .avatar)
         rating = Self.decodeDoubleFlexible(c, key: .rating) ?? 0
@@ -377,8 +399,13 @@ struct Nanny: Decodable, Identifiable {
         age = try c.decodeIfPresent(Int.self, forKey: .age)
         verified = try c.decodeIfPresent(Bool.self, forKey: .is_verified)
             ?? c.decodeIfPresent(Bool.self, forKey: .verified)
-        categories = try c.decodeIfPresent([String].self, forKey: .specialties)
-            ?? c.decodeIfPresent([String].self, forKey: .categories)
+        if let arr = try? c.decode([String].self, forKey: .specialties) {
+            categories = arr
+        } else if let alt = try? c.decode([String].self, forKey: .categories) {
+            categories = alt
+        } else {
+            categories = []
+        }
     }
     
     private enum CodingKeys: String, CodingKey {

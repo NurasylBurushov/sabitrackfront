@@ -146,7 +146,7 @@ struct ActiveNannyCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "shield.checkered")
+                Image(systemName: SFSymbol.available("shield.checkered", fallback: "shield.fill"))
                     .font(.system(size: 16))
                     .foregroundColor(.peachPrimary)
                 Text("Активное отслеживание")

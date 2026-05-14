@@ -94,7 +94,7 @@ struct CustomTabBar: View {
         switch tab {
         case .home: return "house.fill"
         case .chat: return "bubble.left.and.bubble.right.fill"
-        case .market: return "bag.fill"
+        case .market: return SFSymbol.available("bag.fill", fallback: "cart.fill")
         case .map: return "map.fill"
         case .profile: return "person.fill"
         }

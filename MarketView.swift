@@ -106,17 +106,35 @@ struct MarketView: View {
     
     private var productsGridView: some View {
         ScrollView(showsIndicators: false) {
-            LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                spacing: 12
-            ) {
-                ForEach(filteredProducts) { product in
-                    ProductCard(product: product)
+            if filteredProducts.isEmpty {
+                VStack(spacing: 14) {
+                    Image(systemName: SFSymbol.available("cart", fallback: "bag.fill"))
+                        .font(.system(size: 48))
+                        .foregroundColor(.peachPrimary.opacity(0.45))
+                    Text("Пока нет товаров")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.textPrimary)
+                    Text("Нажмите «Продать», чтобы добавить объявление с фото.")
+                        .font(.system(size: 14))
+                        .foregroundColor(.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 48)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                    spacing: 12
+                ) {
+                    ForEach(filteredProducts) { product in
+                        ProductCard(product: product)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 20)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 20)
         }
     }
     
@@ -293,7 +311,7 @@ struct ProductCard: View {
         case "Игрушки": return "puzzlepiece.fill"
         case "Аксессуары": return "star.fill"
         case "Питание": return "cup.and.saucer.fill"
-        default: return "bag.fill"
+        default: return SFSymbol.available("bag.fill", fallback: "square.grid.2x2")
         }
     }
 }

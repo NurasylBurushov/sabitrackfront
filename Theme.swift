@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 extension Color {
     static let peachPrimary = Color(red: 1.0, green: 0.55, blue: 0.40)
@@ -9,6 +10,13 @@ extension Color {
     static let textPrimary = Color(red: 0.13, green: 0.13, blue: 0.13)
     static let textSecondary = Color(red: 0.45, green: 0.45, blue: 0.45)
     static let textMuted = Color(red: 0.70, green: 0.70, blue: 0.70)
+}
+
+/// SF Symbol может отсутствовать на старых версиях iOS — подставляем запасной.
+enum SFSymbol {
+    static func available(_ primary: String, fallback: String) -> String {
+        UIImage(systemName: primary) != nil ? primary : fallback
+    }
 }
 
 extension View {
