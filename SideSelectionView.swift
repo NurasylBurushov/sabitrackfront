@@ -218,19 +218,14 @@ struct SideSelectionView: View {
     
     func loadNannies() {
         Task {
-            do { nannies = try await NetworkService.shared.fetchNannies(filter: nil, search: nil) }
-            catch { nannies = demoNannies }
+            do {
+                let list = try await NetworkService.shared.fetchNannies(filter: nil, search: nil)
+                await MainActor.run { nannies = list }
+            } catch {
+                await MainActor.run { nannies = [] }
+            }
         }
     }
-    
-    let demoNannies: [Nanny] = [
-        Nanny(id: "1", name: "Айгуль Нурланова", rating: 4.9, pricePerHour: 3500, experience: 7, location: "Алматы, Бостандыкский р-н", about: "Опытная няня с медицинским образованием.", age: 34, verified: true, categories: ["Няня"]),
-        Nanny(id: "2", name: "Мария Иванова", rating: 4.7, pricePerHour: 3000, experience: 5, location: "Алматы, Медеуский р-н", about: "Педагог по образованию. Раннее развитие.", age: 29, verified: true, categories: ["Няня", "Гувернантка"]),
-        Nanny(id: "3", name: "Светлана Ким", rating: 4.8, pricePerHour: 4000, experience: 10, location: "Алматы, Наурызбайский р-н", about: "Воспитатель детского сада на пенсии.", age: 55, verified: true, categories: ["Няня", "Сиделка"]),
-        Nanny(id: "4", name: "Динара Омарова", rating: 4.5, pricePerHour: 2500, experience: 2, location: "Алматы, Алмалинский р-н", about: "Студентка педагогического факультета.", age: 21, verified: false, categories: ["Няня", "Репетитор"]),
-        Nanny(id: "5", name: "Елена Петрова", rating: 4.6, pricePerHour: 5000, experience: 15, location: "Алматы, Ауэзовский р-н", about: "Профессиональная домработница и няня.", age: 42, verified: true, categories: ["Няня", "Домработница"]),
-        Nanny(id: "6", name: "Назира Абылкасымова", rating: 4.9, pricePerHour: 4500, experience: 8, location: "Алматы, Жетысуский р-н", about: "Сертифицированная няня. Первая помощь.", age: 38, verified: true, categories: ["Няня", "Сиделка"]),
-    ]
 }
 
 struct NannyCard: View {

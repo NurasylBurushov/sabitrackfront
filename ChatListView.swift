@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct ChatListView: View {
+    @EnvironmentObject var authVM: AuthViewModel
     @State private var chats: [ChatRoom] = []
     @State private var searchText = ""
+    @State private var loadError: String?
+    @State private var showLoadError = false
     
     var body: some View {
         NavigationStack {
@@ -53,7 +56,10 @@ struct ChatListView: View {
                     ScrollView(showsIndicators: false) {
                         LazyVStack(spacing: 8) {
                             ForEach(filteredChats) { chat in
-                                NavigationLink(destination: ChatDetailView(chatId: chat.id, chatName: chat.name)) {
+                                NavigationLink(
+                                    destination: ChatDetailView(chatId: chat.id, chatName: chat.name)
+                                        .environmentObject(authVM)
+                                ) {
                                     ChatRow(chat: chat)
                                 }
                                 .buttonStyle(PlainButtonStyle())
@@ -67,6 +73,11 @@ struct ChatListView: View {
             }
             .navigationBarHidden(true)
             .onAppear { loadChats() }
+            .alert("Не удалось загрузить чаты", isPresented: $showLoadError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(loadError ?? "")
+            }
         }
     }
     
@@ -76,13 +87,57 @@ struct ChatListView: View {
     }
     
     func loadChats() {
-        chats = [
-            ChatRoom(id: "1", name: "Айгуль Нурланова", lastMessage: "Малыш покушал и уснул 😊", lastMessageTime: "14:32", unreadCount: 2),
-            ChatRoom(id: "2", name: "Мария Иванова", lastMessage: "Приду к 9:00 утра", lastMessageTime: "Вчера", unreadCount: 0),
-            ChatRoom(id: "3", name: "Светлана Ким", lastMessage: "Спасибо за доверие!", lastMessageTime: "Пн", unreadCount: 0),
-            ChatRoom(id: "4", name: "Динара Омарова", lastMessage: "Можно перенести на среду?", lastMessageTime: "Пн", unreadCount: 1),
-            ChatRoom(id: "5", name: "Поддержка Sabi Track", lastMessage: "Ваш вопрос решён", lastMessageTime: "25 апр", unreadCount: 0),
+        Task {
+            do {
+                let items = try await NetworkService.shared.fetchChats()
+                let rooms = items.map { item in
+                    ChatRoom(
+                        id: item.id,
+                        name: item.nanny.name,
+                        avatar: item.nanny.avatarUrl,
+                        lastMessage: item.lastMessage,
+                        lastMessageTime: Self.shortDate(from: item.createdAt),
+                        unreadCount: item.unreadCount
+                    )
+                }
+                await MainActor.run {
+                    chats = rooms
+                    loadError = nil
+                    showLoadError = false
+                }
+            } catch {
+                await MainActor.run {
+                    chats = []
+                    loadError = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
+                    showLoadError = true
+                }
+            }
+        }
+    }
+    
+    private static func shortDate(from iso: String) -> String {
+        let parsers: [ISO8601DateFormatter.Options] = [
+            [.withInternetDateTime, .withFractionalSeconds],
+            [.withInternetDateTime],
+            [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime],
         ]
+        for opts in parsers {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = opts
+            if let d = f.date(from: iso) {
+                let out = DateFormatter()
+                out.locale = Locale(identifier: "ru_RU")
+                if Calendar.current.isDateInToday(d) {
+                    out.dateFormat = "HH:mm"
+                } else if Calendar.current.isDateInYesterday(d) {
+                    return "Вчера"
+                } else {
+                    out.dateFormat = "d MMM"
+                }
+                return out.string(from: d)
+            }
+        }
+        return ""
     }
 }
 

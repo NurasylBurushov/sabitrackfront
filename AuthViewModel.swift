@@ -31,6 +31,15 @@ class AuthViewModel: ObservableObject {
     enum AuthFlow { case signIn, signUp }
     enum AuthMethod { case email, phone, google, apple }
     
+    /// Имя по умолчанию после SMS («Пользователь 1234») и пустое имя — считаем профиль незаполненным.
+    var needsProfileCompletion: Bool {
+        guard let u = user else { return true }
+        let n = u.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.isEmpty { return true }
+        if n.hasPrefix("Пользователь") { return true }
+        return false
+    }
+    
     init() {
         let token = UserDefaults.standard.string(forKey: "auth_token")
         if token != nil {

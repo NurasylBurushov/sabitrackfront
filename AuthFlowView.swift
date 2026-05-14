@@ -58,7 +58,7 @@ struct SignInView: View {
                         Circle()
                             .fill(.white.opacity(0.2))
                             .frame(width: 90, height: 90)
-                        Image(systemName: "figure.and.child")
+                        Image(systemName: "person.2.fill")
                             .font(.system(size: 38, weight: .medium))
                             .foregroundColor(.white)
                     }

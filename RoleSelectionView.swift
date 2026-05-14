@@ -18,7 +18,7 @@ struct RoleSelectionView: View {
                             .fill(LinearGradient(colors: [.peachPrimary, .peachDark], startPoint: .topLeading, endPoint: .bottomTrailing))
                             .frame(width: 100, height: 100)
                             .shadow(color: .peachPrimary.opacity(0.3), radius: 20, y: 8)
-                        Image(systemName: "figure.and.child")
+                        Image(systemName: "person.2.fill")
                             .font(.system(size: 42, weight: .medium))
                             .foregroundColor(.white)
                     }
@@ -47,7 +47,7 @@ struct RoleSelectionView: View {
                                 Circle()
                                     .fill(Color.peachLight)
                                     .frame(width: 70, height: 70)
-                                Image(systemName: "figure.and.child")
+                                Image(systemName: "person.2.fill")
                                     .font(.system(size: 30))
                                     .foregroundColor(.peachDark)
                             }

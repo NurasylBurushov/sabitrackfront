@@ -11,7 +11,6 @@ class WebSocketManager: NSObject, ObservableObject, URLSessionWebSocketDelegate 
     private var receiveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var chatId: String?
-    private let baseURL = "https://sabitrack-production.up.railway.app"
     
     static let shared = WebSocketManager()
     
@@ -28,9 +27,14 @@ class WebSocketManager: NSObject, ObservableObject, URLSessionWebSocketDelegate 
             return
         }
         
-        let wsURL = "\(baseURL.replacingOccurrences(of: "https://", with: "wss://"))/chats/\(chatId)/ws?token=\(token)"
+        messages.removeAll()
+        lastMessage = nil
         
-        guard let url = URL(string: wsURL) else {
+        let wsSchemeHost = APIBase.url.replacingOccurrences(of: "https://", with: "wss://")
+        var components = URLComponents(string: "\(wsSchemeHost)/api/chats/\(chatId)/ws")
+        components?.queryItems = [URLQueryItem(name: "token", value: token)]
+        
+        guard let url = components?.url else {
             error = "Некорректный URL WebSocket"
             return
         }
@@ -98,10 +102,7 @@ class WebSocketManager: NSObject, ObservableObject, URLSessionWebSocketDelegate 
                     switch message {
                     case .string(let json):
                         if let data = json.data(using: .utf8) {
-                            let decoder = JSONDecoder()
-                            decoder.keyDecodingStrategy = .convertFromSnakeCase
-                            
-                            if let msg = try? decoder.decode(Message.self, from: data) {
+                            if let msg = try? JSONDecoder().decode(Message.self, from: data) {
                                 DispatchQueue.main.async {
                                     self.lastMessage = msg
                                     if !self.messages.contains(where: { $0.id == msg.id }) {

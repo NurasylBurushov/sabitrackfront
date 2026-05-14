@@ -13,7 +13,9 @@ struct MainTabView: View {
         ZStack {
             Color.peachBg.ignoresSafeArea()
             
-            if userRole.isEmpty {
+            if authVM.needsProfileCompletion {
+                CompleteProfileView()
+            } else if userRole.isEmpty {
                 // Если роль не выбрана (после регистрации) — показываем выбор
                 RoleSelectionView {
                     // При выборе роли @AppStorage сам обновит UI и покажет вкладки

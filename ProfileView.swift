@@ -107,7 +107,21 @@ struct EditProfileView: View {
                         VStack(alignment: .leading, spacing: 6) { Text("Имя").font(.system(size: 13, weight: .medium)).foregroundColor(.textSecondary); peachTextField("Ваше имя", text: $name) }
                         VStack(alignment: .leading, spacing: 6) { Text("Email").font(.system(size: 13, weight: .medium)).foregroundColor(.textSecondary); peachTextField("Email", text: $email).textInputAutocapitalization(.never).keyboardType(.emailAddress) }
                         VStack(alignment: .leading, spacing: 6) { Text("Телефон").font(.system(size: 13, weight: .medium)).foregroundColor(.textSecondary); peachTextField("Телефон", text: $phone).keyboardType(.phonePad) }
-                        Button { authVM.user?.name = name; dismiss() } label: { Text("Сохранить") }.peachButton().padding(.top, 8)
+                        Button {
+                            Task {
+                                do {
+                                    let updated = try await NetworkService.shared.updateProfile(name: name.isEmpty ? nil : name)
+                                    await MainActor.run { authVM.user = updated }
+                                    await authVM.loadProfile()
+                                    dismiss()
+                                } catch {
+                                    await MainActor.run {
+                                        authVM.error = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
+                                        authVM.showError = true
+                                    }
+                                }
+                            }
+                        } label: { Text("Сохранить") }.peachButton().padding(.top, 8)
                     }
                     .padding(.horizontal, 20)
                 }
@@ -115,6 +129,86 @@ struct EditProfileView: View {
             .navigationTitle("Редактировать").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.foregroundColor(.peachPrimary) } }
             .onAppear { name = authVM.user?.name ?? ""; email = authVM.user?.email ?? ""; phone = authVM.user?.phone ?? "" }
+        }
+    }
+}
+
+/// Экран после входа, если имя не задано или осталось автогенерируемое «Пользователь …» (например после SMS).
+struct CompleteProfileView: View {
+    @EnvironmentObject var authVM: AuthViewModel
+    @State private var name = ""
+    @State private var isSaving = false
+    @State private var localError: String?
+    @State private var showLocalError = false
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.peachBg.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Text("Как вас зовут?")
+                            .font(.system(size: 26, weight: .bold))
+                            .foregroundColor(.textPrimary)
+                        Text("Укажите имя — так к вам будут обращаться няни в чате и при бронировании.")
+                            .font(.system(size: 15))
+                            .foregroundColor(.textSecondary)
+                        
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Ваше имя")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.textSecondary)
+                            peachTextField("Например, Айжан", text: $name)
+                        }
+                        
+                        Button {
+                            Task { await save() }
+                        } label: {
+                            Text("Сохранить и продолжить")
+                        }
+                        .peachButton(isSaving)
+                        .padding(.top, 8)
+                    }
+                    .padding(24)
+                }
+            }
+            .navigationTitle("Профиль")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .onAppear { name = authVM.user?.name ?? "" }
+        .alert("Не удалось сохранить", isPresented: $showLocalError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(localError ?? "")
+        }
+    }
+    
+    private func save() async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            localError = "Введите имя не короче 2 символов."
+            showLocalError = true
+            return
+        }
+        guard !trimmed.hasPrefix("Пользователь") else {
+            localError = "Укажите настоящее имя, а не «Пользователь …»."
+            showLocalError = true
+            return
+        }
+        await MainActor.run { isSaving = true }
+        do {
+            let updated = try await NetworkService.shared.updateProfile(name: trimmed)
+            await MainActor.run {
+                authVM.user = updated
+                isSaving = false
+            }
+            await authVM.loadProfile()
+        } catch {
+            await MainActor.run {
+                isSaving = false
+                localError = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
+                showLocalError = true
+            }
         }
     }
 }

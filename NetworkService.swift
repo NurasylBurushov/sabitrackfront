@@ -1,8 +1,13 @@
 import Foundation
 
+/// Базовый URL того же деплоя, что и babytrack13 (REST + WebSocket).
+enum APIBase {
+    static let url = "https://web-production-a7db4.up.railway.app"
+}
+
 class NetworkService {
     static let shared = NetworkService()
-    private let baseURL = "https://web-production-a7db4.up.railway.app"
+    private let baseURL = APIBase.url
     
     private init() {}
     
@@ -43,10 +48,28 @@ class NetworkService {
             if T.self == EmptyResponse.self {
                 return EmptyResponse() as! T
             }
-            return try JSONDecoder().decode(T.self, from: data)
+            let decoder = JSONDecoder()
+            do {
+                return try decoder.decode(T.self, from: data)
+            } catch {
+                #if DEBUG
+                if let preview = String(data: data, encoding: .utf8) {
+                    print("JSON decode error: \(error)\nОтвет: \(preview.prefix(800))")
+                }
+                #endif
+                throw NetworkError.decodingError
+            }
         case 401:
             throw NetworkError.unauthorized
         default:
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let detail = obj["detail"] {
+                let msg: String
+                if let s = detail as? String { msg = s }
+                else if let arr = detail as? [String] { msg = arr.joined(separator: ", ") }
+                else { msg = "Ошибка сервера" }
+                throw NetworkError.serverError(msg)
+            }
             let errorData = try? JSONDecoder().decode(ErrorResponse.self, from: data)
             throw NetworkError.serverError(errorData?.message ?? "Ошибка сервера")
         }
@@ -77,17 +100,32 @@ class NetworkService {
     }
     
     func fetchProfile() async throws -> UserProfile {
-        try await request(endpoint: "/api/user/profile")
+        try await request(endpoint: "/api/users/me")
+    }
+    
+    func updateProfile(name: String? = nil, avatar: String? = nil) async throws -> UserProfile {
+        var body: [String: Any] = [:]
+        if let name { body["name"] = name }
+        if let avatar { body["avatar"] = avatar }
+        return try await request(endpoint: "/api/users/me", method: "PATCH", body: body.isEmpty ? nil : body)
     }
     
     func fetchNannies(filter: String?, search: String?) async throws -> [Nanny] {
         var params = [String: String]()
-        if let f = filter { params["filter"] = f }
-        if let s = search { params["search"] = s }
-        var endpoint = "/api/nannies?"
-        params.forEach { endpoint += "\($0.key)=\($0.value)&" }
-        endpoint.removeLast()
-        return try await request(endpoint: endpoint)
+        if let f = filter { params["specialties"] = f }
+        if let s = search, !s.isEmpty { params["city"] = s }
+        var endpoint = "/api/nannies"
+        if !params.isEmpty {
+            endpoint += "?"
+            params.forEach { endpoint += "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)&" }
+            endpoint.removeLast()
+        }
+        let list: NannyListResponse = try await request(endpoint: endpoint)
+        return list.nannies
+    }
+    
+    func fetchChats() async throws -> [ChatListItem] {
+        try await request(endpoint: "/api/chats")
     }
     
     func fetchMessages(chatId: String) async throws -> [Message] {
@@ -159,6 +197,44 @@ struct UserProfile: Decodable, Identifiable {
     }
 }
 
+struct NannyListResponse: Decodable {
+    let nannies: [Nanny]
+    let total: Int
+    let page: Int
+    let perPage: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case nannies, total, page
+        case perPage = "per_page"
+    }
+}
+
+struct ChatListItem: Decodable {
+    let id: String
+    let nanny: ChatListNanny
+    let lastMessage: String?
+    let unreadCount: Int
+    let createdAt: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id, nanny
+        case lastMessage = "last_message"
+        case unreadCount = "unread_count"
+        case createdAt = "created_at"
+    }
+}
+
+struct ChatListNanny: Decodable {
+    let id: String?
+    let name: String
+    let avatarUrl: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case avatarUrl = "avatar_url"
+    }
+}
+
 struct Nanny: Decodable, Identifiable {
     let id: String
     var name: String
@@ -172,13 +248,88 @@ struct Nanny: Decodable, Identifiable {
     var verified: Bool?
     var categories: [String]?
     
-    enum CodingKeys: String, CodingKey {
-        case id = "_id", name, avatar, rating, pricePerHour
-        case experience, location, about, age, verified, categories
+    init(
+        id: String,
+        name: String,
+        avatar: String? = nil,
+        rating: Double,
+        pricePerHour: Int,
+        experience: Int,
+        location: String? = nil,
+        about: String? = nil,
+        age: Int? = nil,
+        verified: Bool? = nil,
+        categories: [String]? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.avatar = avatar
+        self.rating = rating
+        self.pricePerHour = pricePerHour
+        self.experience = experience
+        self.location = location
+        self.about = about
+        self.age = age
+        self.verified = verified
+        self.categories = categories
+    }
+    
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let s = try c.decodeIfPresent(String.self, forKey: .id) {
+            id = s
+        } else {
+            id = try c.decode(String.self, forKey: .legacyId)
+        }
+        name = try c.decode(String.self, forKey: .name)
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar_url)
+            ?? c.decodeIfPresent(String.self, forKey: .avatar)
+        rating = Self.decodeDoubleFlexible(c, key: .rating) ?? 0
+        pricePerHour = Self.decodeIntFlexible(c, keys: [.hourly_rate, .pricePerHour]) ?? 0
+        experience = Self.decodeIntFlexible(c, keys: [.experience_years, .experience]) ?? 0
+        let city = try c.decodeIfPresent(String.self, forKey: .city)
+        let district = try c.decodeIfPresent(String.self, forKey: .district)
+        if let city = city, let district = district, !district.isEmpty {
+            location = "\(city), \(district)"
+        } else {
+            location = city
+        }
+        about = try c.decodeIfPresent(String.self, forKey: .bio)
+            ?? c.decodeIfPresent(String.self, forKey: .about)
+        age = try c.decodeIfPresent(Int.self, forKey: .age)
+        verified = try c.decodeIfPresent(Bool.self, forKey: .is_verified)
+            ?? c.decodeIfPresent(Bool.self, forKey: .verified)
+        categories = try c.decodeIfPresent([String].self, forKey: .specialties)
+            ?? c.decodeIfPresent([String].self, forKey: .categories)
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case legacyId = "_id"
+        case name, avatar, avatar_url, rating
+        case hourly_rate, pricePerHour
+        case experience_years, experience
+        case city, district, bio, about, age
+        case is_verified, verified
+        case specialties, categories
+    }
+    
+    private static func decodeIntFlexible(_ c: KeyedDecodingContainer<CodingKeys>, keys: [CodingKeys]) -> Int? {
+        for key in keys {
+            if let i = try? c.decodeIfPresent(Int.self, forKey: key) { return i }
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(d.rounded()) }
+        }
+        return nil
+    }
+    
+    private static func decodeDoubleFlexible(_ c: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return d }
+        if let i = try? c.decodeIfPresent(Int.self, forKey: key) { return Double(i) }
+        return nil
     }
 }
 
-struct Message: Decodable, Identifiable {
+struct Message: Decodable, Identifiable, Equatable {
     let id: String
     var text: String
     var senderId: String
@@ -186,8 +337,52 @@ struct Message: Decodable, Identifiable {
     var createdAt: String
     var read: Bool?
     
-    enum CodingKeys: String, CodingKey {
-        case id = "_id", text, senderId, chatId, createdAt, read
+    init(id: String, text: String, senderId: String, chatId: String? = nil, createdAt: String, read: Bool? = nil) {
+        self.id = id
+        self.text = text
+        self.senderId = senderId
+        self.chatId = chatId
+        self.createdAt = createdAt
+        self.read = read
+    }
+    
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let oid = try c.decodeIfPresent(String.self, forKey: .legacyId) {
+            id = oid
+        } else {
+            id = try c.decode(String.self, forKey: .id)
+        }
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        if let sid = try c.decodeIfPresent(String.self, forKey: .sender_id) {
+            senderId = sid
+        } else {
+            senderId = try c.decodeIfPresent(String.self, forKey: .senderId) ?? ""
+        }
+        if let cid = try c.decodeIfPresent(String.self, forKey: .chat_id) {
+            chatId = cid
+        } else {
+            chatId = try c.decodeIfPresent(String.self, forKey: .chatId)
+        }
+        if let ca = try c.decodeIfPresent(String.self, forKey: .created_at) {
+            createdAt = ca
+        } else if let ca = try c.decodeIfPresent(String.self, forKey: .createdAt) {
+            createdAt = ca
+        } else {
+            createdAt = ""
+        }
+        read = try c.decodeIfPresent(Bool.self, forKey: .is_read)
+            ?? c.decodeIfPresent(Bool.self, forKey: .read)
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case legacyId = "_id"
+        case text
+        case sender_id, senderId
+        case chat_id, chatId
+        case created_at, createdAt
+        case is_read, read
     }
 }
 

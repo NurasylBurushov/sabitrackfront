@@ -1,23 +1,25 @@
 import SwiftUI
+import Combine
 
 struct ChatDetailView: View {
     let chatId: String
     let chatName: String
+    @EnvironmentObject var authVM: AuthViewModel
+    @ObservedObject private var ws = WebSocketManager.shared
+    @Environment(\.dismiss) private var dismiss
+    
     @State private var messages: [Message] = []
     @State private var newMessage = ""
-    // ✅ Правильный способ закрытия экрана
-    @Environment(\.dismiss) var dismiss
+    @State private var loadFailed = false
+    
+    private var myUserId: String { authVM.user?.id ?? "" }
     
     var body: some View {
         ZStack {
             Color.peachBg.ignoresSafeArea()
             VStack(spacing: 0) {
-                // Навбар
                 HStack(spacing: 12) {
-                    // ✅ РАБОЧАЯ КНОПКА НАЗАД
-                    Button {
-                        dismiss()
-                    } label: {
+                    Button { dismiss() } label: {
                         Image(systemName: "arrow.left")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundColor(.textPrimary)
@@ -36,21 +38,17 @@ struct ChatDetailView: View {
                         Text(chatName)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.textPrimary)
-                        Text("В сети")
-                            .font(.system(size: 12))
-                            .foregroundColor(.green)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(ws.isConnected ? Color.green : Color.orange)
+                                .frame(width: 8, height: 8)
+                            Text(ws.isConnected ? "В сети" : "Подключение…")
+                                .font(.system(size: 12))
+                                .foregroundColor(.textSecondary)
+                        }
                     }
                     
                     Spacer()
-                    
-                    Button {} label: {
-                        Image(systemName: "phone.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.peachPrimary)
-                            .frame(width: 38, height: 38)
-                            .background(Color.peachSurface)
-                            .cornerRadius(10)
-                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -58,12 +56,12 @@ struct ChatDetailView: View {
                 .background(Color.peachSurface)
                 .shadow(color: .black.opacity(0.05), radius: 4, y: 2)
                 
-                // Сообщения
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
                         LazyVStack(spacing: 8) {
                             ForEach(messages) { msg in
-                                MessageBubble(message: msg, isMe: msg.senderId == "demo_001")
+                                MessageBubble(message: msg, isMe: msg.senderId == myUserId)
+                                    .id(msg.id)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -78,24 +76,14 @@ struct ChatDetailView: View {
                     }
                 }
                 
-                // Инпут
                 HStack(spacing: 10) {
-                    Button {} label: {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 20))
-                            .foregroundColor(.textMuted)
-                            .frame(width: 40, height: 40)
-                    }
-                    
                     HStack {
                         TextField("Сообщение...", text: $newMessage)
                             .font(.system(size: 15))
-                            .onSubmit { sendMessage() }
+                            .onSubmit { sendMessageTapped() }
                         
                         if !newMessage.isEmpty {
-                            Button {
-                                sendMessage()
-                            } label: {
+                            Button { sendMessageTapped() } label: {
                                 Image(systemName: "arrow.up")
                                     .font(.system(size: 16, weight: .bold))
                                     .foregroundColor(.white)
@@ -122,42 +110,50 @@ struct ChatDetailView: View {
             }
         }
         .navigationBarHidden(true)
-        .onAppear { loadMessages() }
+        .onAppear {
+            ws.connect(chatId: chatId)
+            Task { await loadMessages() }
+        }
+        .onDisappear {
+            ws.disconnect()
+        }
+        .onReceive(ws.$lastMessage) { msg in
+            guard let msg else { return }
+            if !messages.contains(where: { $0.id == msg.id }) {
+                messages.append(msg)
+            }
+        }
+        .alert("Не удалось загрузить сообщения", isPresented: $loadFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Проверьте интернет и повторите попытку.")
+        }
     }
     
-    func loadMessages() {
-        messages = [
-            Message(id: "m1", text: "Здравствуйте! Я пришла на работу.", senderId: "nanny_1", createdAt: "2026-04-23T09:00:00", read: true),
-            Message(id: "m2", text: "Доброе утро, Айгуль! Дверь открыта.", senderId: "demo_001", createdAt: "2026-04-23T09:01:00", read: true),
-            Message(id: "m3", text: "Малыш проснулся в хорошем настроении 😊", senderId: "nanny_1", createdAt: "2026-04-23T09:30:00", read: true),
-            Message(id: "m4", text: "Замечательно! Покормите его кашей, пожалуйста", senderId: "demo_001", createdAt: "2026-04-23T09:31:00", read: true),
-            Message(id: "m5", text: "Малыш покушал и уснул 😊", senderId: "nanny_1", createdAt: "2026-04-23T14:32:00", read: false),
-        ]
+    private func loadMessages() async {
+        do {
+            let loaded = try await NetworkService.shared.fetchMessages(chatId: chatId)
+            await MainActor.run { messages = loaded }
+        } catch {
+            await MainActor.run { loadFailed = true }
+        }
     }
     
-    func sendMessage() {
-        guard !newMessage.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        
-        let msg = Message(
-            id: "m_\(UUID().uuidString.prefix(8))",
-            text: newMessage,
-            senderId: "demo_001",
-            createdAt: ISO8601DateFormatter().string(from: Date()),
-            read: false
-        )
-        messages.append(msg)
+    private func sendMessageTapped() {
+        let trimmed = newMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         newMessage = ""
-        
-        // Эхо-ответ (демо)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            let reply = Message(
-                id: "r_\(UUID().uuidString.prefix(8))",
-                text: "Хорошо, поняла! 👍",
-                senderId: "nanny_1",
-                createdAt: ISO8601DateFormatter().string(from: Date()),
-                read: false
-            )
-            messages.append(reply)
+        Task {
+            do {
+                let sent = try await NetworkService.shared.sendMessage(chatId: chatId, text: trimmed)
+                await MainActor.run {
+                    if !messages.contains(where: { $0.id == sent.id }) {
+                        messages.append(sent)
+                    }
+                }
+            } catch {
+                await MainActor.run { newMessage = trimmed }
+            }
         }
     }
 }
@@ -204,13 +200,20 @@ struct MessageBubble: View {
         }
     }
     
-    func formatTime(_ dateStr: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-        if let date = formatter.date(from: dateStr) {
-            let display = DateFormatter()
-            display.dateFormat = "HH:mm"
-            return display.string(from: date)
+    private func formatTime(_ dateStr: String) -> String {
+        let options: [ISO8601DateFormatter.Options] = [
+            [.withInternetDateTime, .withFractionalSeconds],
+            [.withInternetDateTime],
+            [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime],
+        ]
+        for opts in options {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = opts
+            if let date = f.date(from: dateStr) {
+                let display = DateFormatter()
+                display.dateFormat = "HH:mm"
+                return display.string(from: date)
+            }
         }
         return ""
     }
