@@ -110,6 +110,57 @@ class NetworkService {
         return try await request(endpoint: "/api/users/me", method: "PATCH", body: body.isEmpty ? nil : body)
     }
     
+    /// Presign → PUT в R2 → публичный URL (фото профиля, няни, маркет).
+    func uploadImage(data: Data, purpose: String, contentType: String = "image/jpeg") async throws -> String {
+        let presign: PresignUploadResponse = try await request(
+            endpoint: "/api/uploads/presign",
+            method: "POST",
+            body: ["purpose": purpose, "content_type": contentType]
+        )
+        try await putPresignedUpload(data: data, presign: presign)
+        return presign.publicUrl
+    }
+    
+    private func putPresignedUpload(data: Data, presign: PresignUploadResponse) async throws {
+        guard let url = URL(string: presign.uploadUrl) else { throw NetworkError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        let headers = presign.requiredHeaders ?? ["Content-Type": "image/jpeg"]
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        req.httpBody = data
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw NetworkError.serverError("Не удалось загрузить файл в хранилище")
+        }
+    }
+    
+    func updateMyNannyAvatar(publicUrl: String) async throws -> Nanny {
+        try await request(
+            endpoint: "/api/nannies/me",
+            method: "PATCH",
+            body: ["avatar_url": publicUrl]
+        )
+    }
+    
+    func createMarketProduct(
+        title: String,
+        description: String?,
+        price: Int,
+        category: String,
+        condition: String,
+        imageUrl: String?
+    ) async throws -> CreateProductResponse {
+        var body: [String: Any] = [
+            "title": title,
+            "price": price,
+            "category": category,
+            "condition": condition,
+        ]
+        if let description { body["description"] = description }
+        if let imageUrl { body["image_url"] = imageUrl }
+        return try await request(endpoint: "/api/market/products", method: "POST", body: body)
+    }
+    
     func fetchNannies(filter: String?, search: String?) async throws -> [Nanny] {
         var params = [String: String]()
         if let f = filter { params["specialties"] = f }
@@ -138,7 +189,9 @@ class NetworkService {
     
     func fetchProducts(category: String?) async throws -> [Product] {
         var endpoint = "/api/market/products"
-        if let cat = category { endpoint += "?category=\(cat)" }
+        if let cat = category, let enc = cat.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            endpoint += "?category=\(enc)"
+        }
         return try await request(endpoint: endpoint)
     }
     
@@ -177,6 +230,31 @@ enum NetworkError: LocalizedError {
 
 struct EmptyResponse: Decodable {}
 struct ErrorResponse: Decodable { let message: String }
+
+struct PresignUploadResponse: Decodable {
+    let uploadUrl: String
+    let publicUrl: String
+    let key: String
+    let requiredHeaders: [String: String]?
+    
+    enum CodingKeys: String, CodingKey {
+        case uploadUrl = "upload_url"
+        case publicUrl = "public_url"
+        case key
+        case requiredHeaders = "required_headers"
+    }
+}
+
+struct CreateProductResponse: Decodable {
+    let id: String
+    let title: String
+    let price: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case id = "_id"
+        case title, price
+    }
+}
 struct SMSResponse: Decodable { let success: Bool; let message: String }
 struct AuthResponse: Decodable {
     let token: String

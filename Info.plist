@@ -4,5 +4,7 @@
 <dict>
 	<key>GIDClientID</key>
 	<string>981994412149-u6lbkibn07736l7g5etretlkhb23sgfj.apps.googleusercontent.com</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Чтобы загрузить фото профиля, анкеты няни и товаров в маркет.</string>
 </dict>
 </plist>

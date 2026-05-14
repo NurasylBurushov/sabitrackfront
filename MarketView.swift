@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
 struct MarketView: View {
     @State private var products: [Product] = []
@@ -20,7 +22,9 @@ struct MarketView: View {
             }
         }
         .sheet(isPresented: $showSellSheet) {
-            SellProductView()
+            SellProductView(onPublished: {
+                Task { await loadProductsAsync() }
+            })
         }
         .onAppear { loadProducts() }
     }
@@ -85,7 +89,10 @@ struct MarketView: View {
                         title: cat,
                         isSelected: selectedCategory == cat,
                         action: {
-                            withAnimation { selectedCategory = cat }
+                            withAnimation {
+                                selectedCategory = cat
+                                loadProducts()
+                            }
                         }
                     )
                 }
@@ -125,16 +132,17 @@ struct MarketView: View {
     }
     
     func loadProducts() {
-        products = [
-            Product(id: "p1", title: "Pampers Premium Care 4 (9-14кг)", description: "Упаковка 76 шт", price: 4500, category: "Подгузники", sellerName: "Айгуль", condition: "Новое"),
-            Product(id: "p2", title: "Huggies Ultra Comfort 3 (6-10кг)", description: "Упаковка 64 шт", price: 3800, category: "Подгузники", sellerName: "Мария", condition: "Новое"),
-            Product(id: "p3", title: "Bepanthen крем 100г", description: "Защита от опрелостей", price: 3200, category: "Уход", sellerName: "Светлана", condition: "Новое"),
-            Product(id: "p4", title: "Соска Philips Avent", description: "Силиконовая, 0-6 мес", price: 2800, category: "Аксессуары", sellerName: "Динара", condition: "Новая"),
-            Product(id: "p5", title: "Комбинезон зимний", description: "Размер 80", price: 6500, category: "Одежда", sellerName: "Елена", condition: "Б/у"),
-            Product(id: "p6", title: "Развивающий кубик", description: "Мягкий, звуковой", price: 1500, category: "Игрушки", sellerName: "Назира", condition: "Б/у"),
-            Product(id: "p7", title: "Молочная смесь Nutrilon 2", description: "800г", price: 4200, category: "Питание", sellerName: "Айгуль", condition: "Новое"),
-            Product(id: "p8", title: "Pampers Premium Care 5 (12-17кг)", description: "Упаковка 64 шт", price: 4800, category: "Подгузники", sellerName: "Мария", condition: "Новое"),
-        ]
+        Task { await loadProductsAsync() }
+    }
+    
+    private func loadProductsAsync() async {
+        let cat = selectedCategory == "Все" ? nil : selectedCategory
+        do {
+            let list = try await NetworkService.shared.fetchProducts(category: cat)
+            await MainActor.run { products = list }
+        } catch {
+            await MainActor.run { products = [] }
+        }
     }
 }
 
@@ -185,10 +193,31 @@ struct ProductCard: View {
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Color.peachLight)
                     .frame(height: 140)
+                    .clipped()
                 
-                Image(systemName: productIcon(product.category))
-                    .font(.system(size: 40))
-                    .foregroundColor(.peachPrimary.opacity(0.4))
+                if let img = product.image, let u = URL(string: img), !img.isEmpty {
+                    AsyncImage(url: u) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(height: 140)
+                                .clipped()
+                        case .failure:
+                            placeholderIcon
+                        case .empty:
+                            ProgressView()
+                        @unknown default:
+                            placeholderIcon
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 140)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                } else {
+                    placeholderIcon
+                }
                 
                 conditionBadge
             }
@@ -245,7 +274,13 @@ struct ProductCard: View {
     
     private var isNewCondition: Bool {
         let cond = product.condition ?? ""
-        return cond == "Новое" || cond == "Новая"
+        return cond == "Новое" || cond == "Новая" || cond.lowercased() == "new"
+    }
+    
+    private var placeholderIcon: some View {
+        Image(systemName: productIcon(product.category))
+            .font(.system(size: 40))
+            .foregroundColor(.peachPrimary.opacity(0.4))
     }
     
     func productIcon(_ category: String) -> String {
@@ -265,11 +300,18 @@ struct ProductCard: View {
 
 struct SellProductView: View {
     @Environment(\.dismiss) var dismiss
+    var onPublished: () -> Void = {}
+    
     @State private var title = ""
     @State private var descriptionText = ""
     @State private var price = ""
     @State private var category = "Подгузники"
     @State private var condition = "Новое"
+    @State private var photoItem: PhotosPickerItem?
+    @State private var photoPreview: UIImage?
+    @State private var isPublishing = false
+    @State private var publishError: String?
+    @State private var showError = false
     
     let categories = ["Подгузники", "Уход", "Одежда", "Игрушки", "Аксессуары", "Питание"]
     let conditions = ["Новое", "Б/у"]
@@ -307,11 +349,16 @@ struct SellProductView: View {
                         .foregroundColor(.peachPrimary)
                 }
             }
+            .alert("Ошибка", isPresented: $showError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(publishError ?? "")
+            }
         }
     }
     
     private var addPhotoButton: some View {
-        Button {} label: {
+        PhotosPicker(selection: $photoItem, matching: .images) {
             ZStack {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Color.peachSurface)
@@ -321,16 +368,39 @@ struct SellProductView: View {
                             .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .foregroundColor(Color.peachLight)
                     )
-                VStack(spacing: 8) {
-                    Image(systemName: "camera.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.peachPrimary)
-                    Text("Добавить фото")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.textSecondary)
+                if let photoPreview {
+                    Image(uiImage: photoPreview)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 200)
+                        .clipped()
+                        .cornerRadius(16)
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.peachPrimary)
+                        Text("Добавить фото")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.textSecondary)
+                    }
                 }
             }
         }
+        .buttonStyle(.plain)
+        .onChange(of: photoItem) { _, newItem in
+            Task { await loadPhoto(from: newItem) }
+        }
+    }
+    
+    private func loadPhoto(from item: PhotosPickerItem?) async {
+        guard let item else {
+            await MainActor.run { photoPreview = nil }
+            return
+        }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let img = UIImage(data: data) else { return }
+        await MainActor.run { photoPreview = img }
     }
     
     private var titleInput: some View {
@@ -414,11 +484,61 @@ struct SellProductView: View {
     
     private var publishButton: some View {
         Button {
-            dismiss()
+            Task { await publishProduct() }
         } label: {
-            Text("Опубликовать")
+            Text(isPublishing ? "Публикация…" : "Опубликовать")
         }
-        .peachButton()
+        .peachButton(isPublishing)
         .padding(.top, 8)
+        .disabled(isPublishing || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+    
+    private func publishProduct() async {
+        let titleTrim = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !titleTrim.isEmpty else { return }
+        let priceInt = Int(price.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        guard priceInt > 0 else {
+            publishError = "Укажите цену больше 0"
+            showError = true
+            return
+        }
+        await MainActor.run { isPublishing = true }
+        do {
+            var imageUrl: String?
+            if let item = photoItem {
+                let jpeg = try await jpegData(from: item)
+                imageUrl = try await NetworkService.shared.uploadImage(data: jpeg, purpose: "market_product")
+            }
+            let cond = condition == "Новое" ? "new" : "used"
+            _ = try await NetworkService.shared.createMarketProduct(
+                title: titleTrim,
+                description: descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : descriptionText,
+                price: priceInt,
+                category: category,
+                condition: cond,
+                imageUrl: imageUrl
+            )
+            await MainActor.run {
+                isPublishing = false
+                onPublished()
+                dismiss()
+            }
+        } catch {
+            await MainActor.run {
+                isPublishing = false
+                publishError = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
+                showError = true
+            }
+        }
+    }
+    
+    private func jpegData(from item: PhotosPickerItem) async throws -> Data {
+        guard let data = try await item.loadTransferable(type: Data.self) else {
+            throw NetworkError.serverError("Не удалось прочитать фото")
+        }
+        guard let img = UIImage(data: data), let jpeg = img.jpegData(compressionQuality: 0.85) else {
+            throw NetworkError.serverError("Не удалось подготовить изображение (JPEG)")
+        }
+        return jpeg
     }
 }
