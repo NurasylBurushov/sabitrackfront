@@ -2,6 +2,9 @@ import SwiftUI
 import MapKit
 
 struct SafeMapView: View {
+    /// UUID няни из API (`/api/nannies`). Если `nil` — карта в демо-режиме без запроса к `/tracking`.
+    var nannyId: String? = nil
+    
     @State private var region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 43.2389, longitude: 76.8891), span: MKCoordinateSpan(latitudeDelta: 0.015, longitudeDelta: 0.015))
     @State private var nannyLocation: NannyLocation?
     @State private var isTracking = true
@@ -88,8 +91,22 @@ struct SafeMapView: View {
     
     func loadNannyLocation() {
         Task {
+            guard let raw = nannyId?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+                  UUID(uuidString: raw) != nil else {
+                await MainActor.run {
+                    nannyLocation = NannyLocation(
+                        latitude: 43.2389 + Double.random(in: -0.005...0.005),
+                        longitude: 76.8891 + Double.random(in: -0.005...0.005),
+                        timestamp: ISO8601DateFormatter().string(from: Date()),
+                        address: "Демо: укажите nannyId (UUID няни)",
+                        speed: 3.2,
+                        battery: 78
+                    )
+                }
+                return
+            }
             do {
-                nannyLocation = try await NetworkService.shared.fetchNannyLocation(nannyId: "1")
+                nannyLocation = try await NetworkService.shared.fetchNannyLocation(nannyId: raw)
                 if let loc = nannyLocation { withAnimation { region.center = CLLocationCoordinate2D(latitude: loc.latitude, longitude: loc.longitude) } }
             } catch {
                 nannyLocation = NannyLocation(latitude: 43.2389 + Double.random(in: -0.005...0.005), longitude: 76.8891 + Double.random(in: -0.005...0.005), timestamp: ISO8601DateFormatter().string(from: Date()), address: "Алматы, ул. Гоголя 58", speed: 3.2, battery: 78)
