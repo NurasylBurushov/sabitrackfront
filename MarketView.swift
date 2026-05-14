@@ -1,6 +1,8 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import Photos
+import ImageIO
 
 struct MarketView: View {
     @State private var products: [Product] = []
@@ -309,6 +311,8 @@ struct SellProductView: View {
     @State private var condition = "Новое"
     @State private var photoItem: PhotosPickerItem?
     @State private var photoPreview: UIImage?
+    @State private var isLoadingPhoto = false
+    @State private var photoLoadHint: String?
     @State private var isPublishing = false
     @State private var publishError: String?
     @State private var showError = false
@@ -368,7 +372,9 @@ struct SellProductView: View {
                             .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .foregroundColor(Color.peachLight)
                     )
-                if let photoPreview {
+                if isLoadingPhoto {
+                    ProgressView("Загрузка…")
+                } else if let photoPreview {
                     Image(uiImage: photoPreview)
                         .resizable()
                         .scaledToFill()
@@ -383,11 +389,18 @@ struct SellProductView: View {
                         Text("Добавить фото")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.textSecondary)
+                        if let hint = photoLoadHint {
+                            Text(hint)
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12)
+                        }
                     }
                 }
             }
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .onChange(of: photoItem) { _, newItem in
             Task { await loadPhoto(from: newItem) }
         }
@@ -395,12 +408,70 @@ struct SellProductView: View {
     
     private func loadPhoto(from item: PhotosPickerItem?) async {
         guard let item else {
-            await MainActor.run { photoPreview = nil }
+            await MainActor.run {
+                photoPreview = nil
+                photoLoadHint = nil
+                isLoadingPhoto = false
+            }
             return
         }
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let img = UIImage(data: data) else { return }
-        await MainActor.run { photoPreview = img }
+        await MainActor.run {
+            isLoadingPhoto = true
+            photoLoadHint = nil
+        }
+        let ui = await resolveUIImage(from: item)
+        await MainActor.run {
+            isLoadingPhoto = false
+            if let ui {
+                photoPreview = ui
+                photoLoadHint = nil
+            } else {
+                photoPreview = nil
+                photoLoadHint = "Не удалось открыть фото. Попробуйте другое изображение."
+            }
+        }
+    }
+    
+    /// Галерея часто не отдаёт сырой `Data` через `loadTransferable(Data.self)` — тянем через PHAsset либо ImageIO.
+    private func resolveUIImage(from item: PhotosPickerItem) async -> UIImage? {
+        if let id = item.itemIdentifier {
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+            if let asset = assets.firstObject {
+                if let img = await requestImageFromAsset(asset) {
+                    return img
+                }
+            }
+        }
+        if let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty {
+            return Self.uiImage(from: data)
+        }
+        return nil
+    }
+    
+    private func requestImageFromAsset(_ asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { cont in
+            let opts = PHImageRequestOptions()
+            opts.deliveryMode = .highQualityFormat
+            opts.isNetworkAccessAllowed = true
+            var done = false
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: PHImageManagerMaximumSize,
+                contentMode: .aspectFit,
+                options: opts
+            ) { image, _ in
+                guard !done else { return }
+                done = true
+                cont.resume(returning: image)
+            }
+        }
+    }
+    
+    private static func uiImage(from data: Data) -> UIImage? {
+        if let i = UIImage(data: data) { return i }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        guard let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        return UIImage(cgImage: cg, scale: UIScreen.main.scale, orientation: .up)
     }
     
     private var titleInput: some View {
@@ -505,7 +576,9 @@ struct SellProductView: View {
         await MainActor.run { isPublishing = true }
         do {
             var imageUrl: String?
-            if let item = photoItem {
+            if let img = photoPreview, let jpeg = img.jpegData(compressionQuality: 0.85) {
+                imageUrl = try await NetworkService.shared.uploadImage(data: jpeg, purpose: "market_product")
+            } else if let item = photoItem {
                 let jpeg = try await jpegData(from: item)
                 imageUrl = try await NetworkService.shared.uploadImage(data: jpeg, purpose: "market_product")
             }
@@ -533,11 +606,11 @@ struct SellProductView: View {
     }
     
     private func jpegData(from item: PhotosPickerItem) async throws -> Data {
-        guard let data = try await item.loadTransferable(type: Data.self) else {
+        guard let ui = await resolveUIImage(from: item) else {
             throw NetworkError.serverError("Не удалось прочитать фото")
         }
-        guard let img = UIImage(data: data), let jpeg = img.jpegData(compressionQuality: 0.85) else {
-            throw NetworkError.serverError("Не удалось подготовить изображение (JPEG)")
+        guard let jpeg = ui.jpegData(compressionQuality: 0.85) else {
+            throw NetworkError.serverError("Не удалось подготовить JPEG")
         }
         return jpeg
     }
