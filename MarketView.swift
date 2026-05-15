@@ -1,7 +1,6 @@
 import SwiftUI
 import PhotosUI
 import UIKit
-import Photos
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -328,9 +327,8 @@ struct SellProductView: View {
     @State private var price = ""
     @State private var category = "Подгузники"
     @State private var condition = "Новое"
-    @State private var photoItem: PhotosPickerItem?
+    @State private var showLibraryPicker = false
     @State private var photoPreview: UIImage?
-    @State private var isLoadingPhoto = false
     @State private var photoLoadHint: String?
     @State private var isPublishing = false
     @State private var publishError: String?
@@ -377,11 +375,26 @@ struct SellProductView: View {
             } message: {
                 Text(publishError ?? "")
             }
+            .fullScreenCover(isPresented: $showLibraryPicker) {
+                MarketLibraryImagePicker(isPresented: $showLibraryPicker) { result in
+                    switch result {
+                    case .cancelled:
+                        break
+                    case .decodeFailed:
+                        photoLoadHint = "Не удалось открыть фото. Попробуйте другое изображение."
+                    case .picked(let image):
+                        photoPreview = image
+                        photoLoadHint = nil
+                    }
+                }
+            }
         }
     }
     
     private var addPhotoButton: some View {
-        PhotosPicker(selection: $photoItem, matching: .images) {
+        Button {
+            showLibraryPicker = true
+        } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Color.peachSurface)
@@ -391,9 +404,7 @@ struct SellProductView: View {
                             .stroke(style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .foregroundColor(Color.peachLight)
                     )
-                if isLoadingPhoto {
-                    ProgressView("Загрузка…")
-                } else if let photoPreview {
+                if let photoPreview {
                     Image(uiImage: photoPreview)
                         .resizable()
                         .scaledToFill()
@@ -408,6 +419,11 @@ struct SellProductView: View {
                         Text("Добавить фото")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.textSecondary)
+                        Text("Галерея (симулятор: добавьте фото через меню устройства)")
+                            .font(.system(size: 11))
+                            .foregroundColor(.textMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 12)
                         if let hint = photoLoadHint {
                             Text(hint)
                                 .font(.system(size: 11))
@@ -420,111 +436,7 @@ struct SellProductView: View {
             }
             .contentShape(Rectangle())
         }
-        .onChange(of: photoItem) { _, newItem in
-            Task { await loadPhoto(from: newItem) }
-        }
-    }
-    
-    private func loadPhoto(from item: PhotosPickerItem?) async {
-        guard let item else {
-            await MainActor.run {
-                photoPreview = nil
-                photoLoadHint = nil
-                isLoadingPhoto = false
-            }
-            return
-        }
-        await MainActor.run {
-            isLoadingPhoto = true
-            photoLoadHint = nil
-        }
-        let ui = await resolveUIImage(from: item)
-        await MainActor.run {
-            isLoadingPhoto = false
-            if let ui {
-                photoPreview = ui
-                photoLoadHint = nil
-            } else {
-                photoPreview = nil
-                photoLoadHint = "Не удалось открыть фото. Попробуйте другое изображение."
-            }
-        }
-    }
-    
-    /// Симулятор и часть устройств плохо отдают фото через PHAsset/`Data.self`. Сначала `NSItemProvider` (как в системном пикере), затем запасные пути.
-    private func resolveUIImage(from item: PhotosPickerItem) async -> UIImage? {
-        if let img = await loadUIImage(from: item.itemProvider) {
-            return img
-        }
-        if let id = item.itemIdentifier {
-            let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-            if let asset = assets.firstObject, let img = await requestImageFromAsset(asset) {
-                return img
-            }
-        }
-        if let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty {
-            return Self.uiImage(from: data)
-        }
-        return nil
-    }
-
-    private func loadUIImage(from provider: NSItemProvider) async -> UIImage? {
-        if provider.canLoadObject(ofClass: UIImage.self) {
-            let fromObject: UIImage? = await withCheckedContinuation { cont in
-                provider.loadObject(ofClass: UIImage.self) { object, _ in
-                    cont.resume(returning: object as? UIImage)
-                }
-            }
-            if let fromObject { return fromObject }
-        }
-        for typeId in provider.registeredTypeIdentifiers {
-            let data: Data? = await withCheckedContinuation { cont in
-                provider.loadDataRepresentation(forTypeIdentifier: typeId) { d, _ in
-                    cont.resume(returning: d)
-                }
-            }
-            if let data, !data.isEmpty, let img = Self.uiImage(from: data) {
-                return img
-            }
-        }
-        for ut in [UTType.image, UTType.jpeg, UTType.png, UTType.heic] {
-            guard provider.hasItemConformingToTypeIdentifier(ut.identifier) else { continue }
-            let data: Data? = await withCheckedContinuation { cont in
-                provider.loadDataRepresentation(forTypeIdentifier: ut.identifier) { d, _ in
-                    cont.resume(returning: d)
-                }
-            }
-            if let data, !data.isEmpty, let img = Self.uiImage(from: data) {
-                return img
-            }
-        }
-        return nil
-    }
-    
-    private func requestImageFromAsset(_ asset: PHAsset) async -> UIImage? {
-        await withCheckedContinuation { cont in
-            let opts = PHImageRequestOptions()
-            opts.deliveryMode = .highQualityFormat
-            opts.isNetworkAccessAllowed = true
-            var done = false
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: PHImageManagerMaximumSize,
-                contentMode: .aspectFit,
-                options: opts
-            ) { image, _ in
-                guard !done else { return }
-                done = true
-                cont.resume(returning: image)
-            }
-        }
-    }
-    
-    private static func uiImage(from data: Data) -> UIImage? {
-        if let i = UIImage(data: data) { return i }
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        guard let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
-        return UIImage(cgImage: cg, scale: UIScreen.main.scale, orientation: .up)
+        .buttonStyle(.plain)
     }
     
     private var titleInput: some View {
@@ -631,9 +543,6 @@ struct SellProductView: View {
             var imageUrl: String?
             if let img = photoPreview, let jpeg = img.jpegData(compressionQuality: 0.85) {
                 imageUrl = try await NetworkService.shared.uploadImage(data: jpeg, purpose: "market_product")
-            } else if let item = photoItem {
-                let jpeg = try await jpegData(from: item)
-                imageUrl = try await NetworkService.shared.uploadImage(data: jpeg, purpose: "market_product")
             }
             let cond = condition == "Новое" ? "new" : "used"
             _ = try await NetworkService.shared.createMarketProduct(
@@ -657,14 +566,102 @@ struct SellProductView: View {
             }
         }
     }
-    
-    private func jpegData(from item: PhotosPickerItem) async throws -> Data {
-        guard let ui = await resolveUIImage(from: item) else {
-            throw NetworkError.serverError("Не удалось прочитать фото")
+}
+
+// MARK: - Галерея для маркета (PHPicker надёжнее SwiftUI PhotosPicker в sheet / симуляторе)
+
+enum MarketPhotoPickResult {
+    case cancelled
+    case decodeFailed
+    case picked(UIImage)
+}
+
+fileprivate func decodeUIImageFromItemProvider(_ provider: NSItemProvider) async -> UIImage? {
+    if provider.canLoadObject(ofClass: UIImage.self) {
+        let fromObject: UIImage? = await withCheckedContinuation { cont in
+            provider.loadObject(ofClass: UIImage.self) { object, _ in
+                cont.resume(returning: object as? UIImage)
+            }
         }
-        guard let jpeg = ui.jpegData(compressionQuality: 0.85) else {
-            throw NetworkError.serverError("Не удалось подготовить JPEG")
+        if let fromObject { return fromObject }
+    }
+    for typeId in provider.registeredTypeIdentifiers {
+        let data: Data? = await withCheckedContinuation { cont in
+            provider.loadDataRepresentation(forTypeIdentifier: typeId) { d, _ in
+                cont.resume(returning: d)
+            }
         }
-        return jpeg
+        if let data, !data.isEmpty, let img = uiImageFromPickerData(data) { return img }
+    }
+    for ut in [UTType.image, UTType.jpeg, UTType.png, UTType.heic] {
+        guard provider.hasItemConformingToTypeIdentifier(ut.identifier) else { continue }
+        let data: Data? = await withCheckedContinuation { cont in
+            provider.loadDataRepresentation(forTypeIdentifier: ut.identifier) { d, _ in
+                cont.resume(returning: d)
+            }
+        }
+        if let data, !data.isEmpty, let img = uiImageFromPickerData(data) { return img }
+    }
+    return nil
+}
+
+fileprivate func uiImageFromPickerData(_ data: Data) -> UIImage? {
+    if let i = UIImage(data: data) { return i }
+    guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    guard let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+    return UIImage(cgImage: cg, scale: UIScreen.main.scale, orientation: .up)
+}
+
+struct MarketLibraryImagePicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    var onResult: (MarketPhotoPickResult) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.filter = .images
+        config.selectionLimit = 1
+        if #available(iOS 15.0, *) {
+            config.preferredAssetRepresentationMode = .current
+        }
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        var parent: MarketLibraryImagePicker
+
+        init(parent: MarketLibraryImagePicker) {
+            self.parent = parent
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            Task {
+                let outcome: MarketPhotoPickResult
+                if results.isEmpty {
+                    outcome = .cancelled
+                } else if let provider = results.first?.itemProvider {
+                    if let img = await decodeUIImageFromItemProvider(provider) {
+                        outcome = .picked(img)
+                    } else {
+                        outcome = .decodeFailed
+                    }
+                } else {
+                    outcome = .cancelled
+                }
+                await MainActor.run {
+                    parent.onResult(outcome)
+                    parent.isPresented = false
+                }
+            }
+        }
     }
 }
