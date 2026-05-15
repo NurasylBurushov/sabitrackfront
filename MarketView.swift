@@ -3,6 +3,7 @@ import PhotosUI
 import UIKit
 import Photos
 import ImageIO
+import UniformTypeIdentifiers
 
 struct MarketView: View {
     @State private var products: [Product] = []
@@ -450,18 +451,52 @@ struct SellProductView: View {
         }
     }
     
-    /// Галерея часто не отдаёт сырой `Data` через `loadTransferable(Data.self)` — тянем через PHAsset либо ImageIO.
+    /// Симулятор и часть устройств плохо отдают фото через PHAsset/`Data.self`. Сначала `NSItemProvider` (как в системном пикере), затем запасные пути.
     private func resolveUIImage(from item: PhotosPickerItem) async -> UIImage? {
+        if let img = await loadUIImage(from: item.itemProvider) {
+            return img
+        }
         if let id = item.itemIdentifier {
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-            if let asset = assets.firstObject {
-                if let img = await requestImageFromAsset(asset) {
-                    return img
-                }
+            if let asset = assets.firstObject, let img = await requestImageFromAsset(asset) {
+                return img
             }
         }
         if let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty {
             return Self.uiImage(from: data)
+        }
+        return nil
+    }
+
+    private func loadUIImage(from provider: NSItemProvider) async -> UIImage? {
+        if provider.canLoadObject(ofClass: UIImage.self) {
+            let fromObject: UIImage? = await withCheckedContinuation { cont in
+                provider.loadObject(ofClass: UIImage.self) { object, _ in
+                    cont.resume(returning: object as? UIImage)
+                }
+            }
+            if let fromObject { return fromObject }
+        }
+        for typeId in provider.registeredTypeIdentifiers {
+            let data: Data? = await withCheckedContinuation { cont in
+                provider.loadDataRepresentation(forTypeIdentifier: typeId) { d, _ in
+                    cont.resume(returning: d)
+                }
+            }
+            if let data, !data.isEmpty, let img = Self.uiImage(from: data) {
+                return img
+            }
+        }
+        for ut in [UTType.image, UTType.jpeg, UTType.png, UTType.heic] {
+            guard provider.hasItemConformingToTypeIdentifier(ut.identifier) else { continue }
+            let data: Data? = await withCheckedContinuation { cont in
+                provider.loadDataRepresentation(forTypeIdentifier: ut.identifier) { d, _ in
+                    cont.resume(returning: d)
+                }
+            }
+            if let data, !data.isEmpty, let img = Self.uiImage(from: data) {
+                return img
+            }
         }
         return nil
     }
