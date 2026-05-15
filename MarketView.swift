@@ -1,7 +1,5 @@
 import SwiftUI
-import PhotosUI
 import UIKit
-import ImageIO
 import UniformTypeIdentifiers
 
 struct MarketView: View {
@@ -23,7 +21,7 @@ struct MarketView: View {
                 productsGridView
             }
         }
-        .sheet(isPresented: $showSellSheet) {
+        .fullScreenCover(isPresented: $showSellSheet) {
             SellProductView(onPublished: {
                 Task { await loadProductsAsync() }
             })
@@ -338,54 +336,56 @@ struct SellProductView: View {
     let conditions = ["Новое", "Б/у"]
     
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.peachBg.ignoresSafeArea()
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 16) {
-                        addPhotoButton
-                        
-                        titleInput
-                        descriptionInput
-                        
-                        HStack(spacing: 12) {
-                            priceInput
-                            conditionPicker
+        ZStack {
+            NavigationStack {
+                ZStack {
+                    Color.peachBg.ignoresSafeArea()
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 16) {
+                            addPhotoButton
+                            
+                            titleInput
+                            descriptionInput
+                            
+                            HStack(spacing: 12) {
+                                priceInput
+                                conditionPicker
+                            }
+                            
+                            categoryPicker
+                            
+                            publishButton
                         }
-                        
-                        categoryPicker
-                        
-                        publishButton
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
+                        .padding(.bottom, 30)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-                    .padding(.bottom, 30)
+                }
+                .navigationTitle("Продать товар")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Отмена") { dismiss() }
+                            .foregroundColor(.peachPrimary)
+                    }
+                }
+                .alert("Ошибка", isPresented: $showError) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(publishError ?? "")
                 }
             }
-            .navigationTitle("Продать товар")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Отмена") { dismiss() }
-                        .foregroundColor(.peachPrimary)
-                }
-            }
-            .alert("Ошибка", isPresented: $showError) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(publishError ?? "")
-            }
-            .fullScreenCover(isPresented: $showLibraryPicker) {
-                MarketLibraryImagePicker(isPresented: $showLibraryPicker) { result in
-                    switch result {
-                    case .cancelled:
-                        break
-                    case .decodeFailed:
-                        photoLoadHint = "Не удалось открыть фото. Попробуйте другое изображение."
-                    case .picked(let image):
-                        photoPreview = image
-                        photoLoadHint = nil
-                    }
+        }
+        .sheet(isPresented: $showLibraryPicker) {
+            MarketPhotoLibraryPicker(isPresented: $showLibraryPicker) { result in
+                switch result {
+                case .cancelled:
+                    break
+                case .decodeFailed:
+                    photoLoadHint = "Не удалось открыть фото. Попробуйте другое изображение."
+                case .picked(let image):
+                    photoPreview = image
+                    photoLoadHint = nil
                 }
             }
         }
@@ -393,6 +393,10 @@ struct SellProductView: View {
     
     private var addPhotoButton: some View {
         Button {
+            guard UIImagePickerController.isSourceTypeAvailable(.photoLibrary) else {
+                photoLoadHint = "Галерея на этом устройстве недоступна."
+                return
+            }
             showLibraryPicker = true
         } label: {
             ZStack {
@@ -568,7 +572,7 @@ struct SellProductView: View {
     }
 }
 
-// MARK: - Галерея для маркета (PHPicker надёжнее SwiftUI PhotosPicker в sheet / симуляторе)
+// MARK: - Галерея для маркета (UIImagePicker: стабильно в симуляторе; PHPicker/SwiftUI sheet часто ломаются)
 
 enum MarketPhotoPickResult {
     case cancelled
@@ -576,43 +580,8 @@ enum MarketPhotoPickResult {
     case picked(UIImage)
 }
 
-fileprivate func decodeUIImageFromItemProvider(_ provider: NSItemProvider) async -> UIImage? {
-    if provider.canLoadObject(ofClass: UIImage.self) {
-        let fromObject: UIImage? = await withCheckedContinuation { cont in
-            provider.loadObject(ofClass: UIImage.self) { object, _ in
-                cont.resume(returning: object as? UIImage)
-            }
-        }
-        if let fromObject { return fromObject }
-    }
-    for typeId in provider.registeredTypeIdentifiers {
-        let data: Data? = await withCheckedContinuation { cont in
-            provider.loadDataRepresentation(forTypeIdentifier: typeId) { d, _ in
-                cont.resume(returning: d)
-            }
-        }
-        if let data, !data.isEmpty, let img = uiImageFromPickerData(data) { return img }
-    }
-    for ut in [UTType.image, UTType.jpeg, UTType.png, UTType.heic] {
-        guard provider.hasItemConformingToTypeIdentifier(ut.identifier) else { continue }
-        let data: Data? = await withCheckedContinuation { cont in
-            provider.loadDataRepresentation(forTypeIdentifier: ut.identifier) { d, _ in
-                cont.resume(returning: d)
-            }
-        }
-        if let data, !data.isEmpty, let img = uiImageFromPickerData(data) { return img }
-    }
-    return nil
-}
-
-fileprivate func uiImageFromPickerData(_ data: Data) -> UIImage? {
-    if let i = UIImage(data: data) { return i }
-    guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-    guard let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
-    return UIImage(cgImage: cg, scale: UIScreen.main.scale, orientation: .up)
-}
-
-struct MarketLibraryImagePicker: UIViewControllerRepresentable {
+/// Классический выбор из медиатеки — надёжнее вложенных SwiftUI-пикеров при `fullScreenCover` + `sheet`.
+struct MarketPhotoLibraryPicker: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     var onResult: (MarketPhotoPickResult) -> Void
 
@@ -620,47 +589,52 @@ struct MarketLibraryImagePicker: UIViewControllerRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration(photoLibrary: .shared())
-        config.filter = .images
-        config.selectionLimit = 1
-        if #available(iOS 15.0, *) {
-            config.preferredAssetRepresentationMode = .current
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        if let types = UIImagePickerController.availableMediaTypes(for: .photoLibrary) {
+            let imagesOnly = types.filter { t in
+                !(t.contains("movie") || t.contains("video") || t.contains("Video"))
+            }
+            picker.mediaTypes = imagesOnly.isEmpty ? [UTType.image.identifier] : imagesOnly
+        } else {
+            picker.mediaTypes = [UTType.image.identifier]
         }
-        let picker = PHPickerViewController(configuration: config)
         picker.delegate = context.coordinator
+        picker.allowsEditing = false
         return picker
     }
 
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
         context.coordinator.parent = self
     }
 
-    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        var parent: MarketLibraryImagePicker
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        var parent: MarketPhotoLibraryPicker
 
-        init(parent: MarketLibraryImagePicker) {
+        init(parent: MarketPhotoLibraryPicker) {
             self.parent = parent
         }
 
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            Task {
-                let outcome: MarketPhotoPickResult
-                if results.isEmpty {
-                    outcome = .cancelled
-                } else if let provider = results.first?.itemProvider {
-                    if let img = await decodeUIImageFromItemProvider(provider) {
-                        outcome = .picked(img)
-                    } else {
-                        outcome = .decodeFailed
-                    }
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            Task { @MainActor in
+                parent.onResult(.cancelled)
+                parent.isPresented = false
+            }
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            let img = (info[.originalImage] as? UIImage) ?? (info[.editedImage] as? UIImage)
+            Task { @MainActor in
+                if let img {
+                    parent.onResult(.picked(img))
                 } else {
-                    outcome = .cancelled
+                    parent.onResult(.decodeFailed)
                 }
-                await MainActor.run {
-                    parent.onResult(outcome)
-                    parent.isPresented = false
-                }
+                parent.isPresented = false
             }
         }
     }
