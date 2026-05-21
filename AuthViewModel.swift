@@ -31,11 +31,13 @@ class AuthViewModel: ObservableObject {
     enum AuthFlow { case signIn, signUp }
     enum AuthMethod { case email, phone, google, apple }
     
-    /// Имя по умолчанию после SMS («Пользователь 1234») и пустое имя — считаем профиль незаполненным.
+    /// После SMS или без имени — показываем экран «Как вас зовут?» (как после Google/регистрации).
     var needsProfileCompletion: Bool {
         guard let u = user else { return true }
+        if u.profileCompleted == false { return true }
+        if u.profileCompleted == true { return false }
         let n = u.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if n.isEmpty { return true }
+        if n.count < 2 { return true }
         if n.hasPrefix("Пользователь") { return true }
         return false
     }
@@ -210,6 +212,7 @@ class AuthViewModel: ObservableObject {
     func logout() {
         Task { @MainActor in
             UserDefaults.standard.removeObject(forKey: "auth_token")
+            UserDefaults.standard.removeObject(forKey: "userRole")
             self.user = nil
             self.isAuthenticated = false
             self.currentFlow = .signIn
@@ -221,10 +224,14 @@ class AuthViewModel: ObservableObject {
     
     // MARK: - Helpers
     @MainActor
-    private func saveAuth(_ response: AuthResponse) {
+    private func saveAuth(_ response: AuthResponse) async {
         UserDefaults.standard.set(response.token, forKey: "auth_token")
-        self.user = response.user
         self.isAuthenticated = true
+        self.user = response.user
+        await loadProfile()
+        if self.user == nil {
+            self.user = response.user
+        }
     }
     
     @MainActor

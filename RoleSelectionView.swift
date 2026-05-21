@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RoleSelectionView: View {
+    @EnvironmentObject var authVM: AuthViewModel
     @AppStorage("userRole") private var userRole: String = ""
     var onComplete: () -> Void
     
@@ -39,8 +40,7 @@ struct RoleSelectionView: View {
                 VStack(spacing: 20) {
                     // РОДИТЕЛЬ
                     Button {
-                        userRole = "parent"
-                        onComplete()
+                        Task { await selectRole("parent") }
                     } label: {
                         HStack(spacing: 20) {
                             ZStack {
@@ -80,8 +80,7 @@ struct RoleSelectionView: View {
                     
                     // НЯНЯ
                     Button {
-                        userRole = "nanny"
-                        onComplete()
+                        Task { await selectRole("nanny") }
                     } label: {
                         HStack(spacing: 20) {
                             ZStack {
@@ -125,5 +124,19 @@ struct RoleSelectionView: View {
                 Spacer()
             }
         }
+    }
+    
+    private func selectRole(_ role: String) async {
+        userRole = role
+        do {
+            _ = try await NetworkService.shared.updateProfile(role: role)
+            await authVM.loadProfile()
+        } catch {
+            await MainActor.run {
+                authVM.error = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
+                authVM.showError = true
+            }
+        }
+        onComplete()
     }
 }

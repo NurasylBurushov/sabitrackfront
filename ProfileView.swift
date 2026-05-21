@@ -294,10 +294,12 @@ struct EditProfileView: View {
     }
 }
 
-/// Экран после входа, если имя не задано или осталось автогенерируемое «Пользователь …» (например после SMS).
+/// После входа по SMS (и при пустом имени): имя + роль сохраняются в БД на сервере.
 struct CompleteProfileView: View {
     @EnvironmentObject var authVM: AuthViewModel
+    @AppStorage("userRole") private var userRole: String = ""
     @State private var name = ""
+    @State private var selectedRole: String = "parent"
     @State private var isSaving = false
     @State private var localError: String?
     @State private var showLocalError = false
@@ -308,10 +310,10 @@ struct CompleteProfileView: View {
                 Color.peachBg.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        Text("Как вас зовут?")
+                        Text("Завершите регистрацию")
                             .font(.system(size: 26, weight: .bold))
                             .foregroundColor(.textPrimary)
-                        Text("Укажите имя — так к вам будут обращаться няни в чате и при бронировании.")
+                        Text("Укажите имя и выберите, как вы будете пользоваться приложением. Данные сохранятся в вашем аккаунте.")
                             .font(.system(size: 15))
                             .foregroundColor(.textSecondary)
                         
@@ -320,6 +322,25 @@ struct CompleteProfileView: View {
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(.textSecondary)
                             peachTextField("Например, Айжан", text: $name)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Кто вы?")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.textSecondary)
+                            
+                            roleOption(
+                                id: "parent",
+                                title: "Я родитель",
+                                subtitle: "Ищу няню или специалиста",
+                                icon: "person.2.fill"
+                            )
+                            roleOption(
+                                id: "nanny",
+                                title: "Я няня / специалист",
+                                subtitle: "Предлагаю услуги по уходу",
+                                icon: "figure.dress.line.vertical.figure"
+                            )
                         }
                         
                         Button {
@@ -336,12 +357,56 @@ struct CompleteProfileView: View {
             .navigationTitle("Профиль")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .onAppear { name = authVM.user?.name ?? "" }
+        .onAppear {
+            let existing = authVM.user?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !existing.isEmpty, !existing.hasPrefix("Пользователь") {
+                name = existing
+            }
+            if let r = authVM.user?.role, r == "parent" || r == "nanny" {
+                selectedRole = r
+            }
+        }
         .alert("Не удалось сохранить", isPresented: $showLocalError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(localError ?? "")
         }
+    }
+    
+    private func roleOption(id: String, title: String, subtitle: String, icon: String) -> some View {
+        Button {
+            selectedRole = id
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(selectedRole == id ? .white : .peachPrimary)
+                    .frame(width: 44, height: 44)
+                    .background(selectedRole == id ? Color.peachPrimary : Color.peachLight)
+                    .cornerRadius(12)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.textPrimary)
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundColor(.textSecondary)
+                }
+                Spacer()
+                if selectedRole == id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.peachPrimary)
+                }
+            }
+            .padding(14)
+            .background(Color.peachSurface)
+            .cornerRadius(14)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(selectedRole == id ? Color.peachPrimary : Color.peachLight, lineWidth: selectedRole == id ? 2 : 1.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
     
     private func save() async {
@@ -358,9 +423,10 @@ struct CompleteProfileView: View {
         }
         await MainActor.run { isSaving = true }
         do {
-            let updated = try await NetworkService.shared.updateProfile(name: trimmed)
+            let updated = try await NetworkService.shared.updateProfile(name: trimmed, role: selectedRole)
             await MainActor.run {
                 authVM.user = updated
+                userRole = selectedRole
                 isSaving = false
             }
             await authVM.loadProfile()

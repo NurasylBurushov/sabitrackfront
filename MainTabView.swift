@@ -16,9 +16,10 @@ struct MainTabView: View {
             if authVM.needsProfileCompletion {
                 CompleteProfileView()
             } else if userRole.isEmpty {
-                // Если роль не выбрана (после регистрации) — показываем выбор
                 RoleSelectionView {
-                    // При выборе роли @AppStorage сам обновит UI и покажет вкладки
+                    if let r = authVM.user?.role, r == "parent" || r == "nanny" {
+                        userRole = r
+                    }
                 }
             } else {
                 // Роль выбрана — показываем главный экран

@@ -103,10 +103,11 @@ class NetworkService {
         try await request(endpoint: "/api/users/me")
     }
     
-    func updateProfile(name: String? = nil, avatar: String? = nil) async throws -> UserProfile {
+    func updateProfile(name: String? = nil, avatar: String? = nil, role: String? = nil) async throws -> UserProfile {
         var body: [String: Any] = [:]
         if let name { body["name"] = name }
         if let avatar { body["avatar"] = avatar }
+        if let role { body["role"] = role }
         return try await request(endpoint: "/api/users/me", method: "PATCH", body: body.isEmpty ? nil : body)
     }
     
@@ -268,10 +269,11 @@ struct UserProfile: Decodable, Identifiable {
     var phone: String?
     var avatar: String?
     var role: String?
+    var profileCompleted: Bool?
     var createdAt: String?
     
     enum CodingKeys: String, CodingKey {
-        case id = "_id", name, email, phone, avatar, role, createdAt
+        case id = "_id", name, email, phone, avatar, role, profileCompleted, createdAt
     }
 }
 
