@@ -98,14 +98,24 @@ class AuthViewModel: ObservableObject {
     }
     
     // MARK: - SMS
+    /// +77011234567; принимает 8701…, 701…, 7701…
+    static func normalizedKZPhone(_ input: String) -> String? {
+        var d = input.filter { $0.isNumber }
+        if d.count == 11, d.first == "8" { d = "7" + String(d.dropFirst()) }
+        if d.count == 10 { d = "7" + d }
+        guard d.count == 11, d.first == "7" else { return nil }
+        return "+\(d)"
+    }
+    
     func sendSMS() async {
-        guard phoneNumber.count >= 10 else {
-            await MainActor.run { error = "Введите корректный номер"; showError = true }
+        guard let finalPhone = Self.normalizedKZPhone(phoneNumber) else {
+            await MainActor.run {
+                error = "Введите номер Казахстана: 8701… или +7701…"
+                showError = true
+            }
             return
         }
         await MainActor.run { isLoading = true; error = nil }
-        let cleanPhone = phoneNumber.filter { $0.isNumber }
-        let finalPhone = cleanPhone.hasPrefix("7") ? "+\(cleanPhone)" : "+7\(cleanPhone)"
         do {
             _ = try await NetworkService.shared.sendSMSCode(phone: finalPhone)
             await MainActor.run {
@@ -124,9 +134,11 @@ class AuthViewModel: ObservableObject {
             await MainActor.run { error = "Введите код"; showError = true }
             return
         }
+        guard let finalPhone = Self.normalizedKZPhone(phoneNumber) else {
+            await MainActor.run { error = "Некорректный номер телефона"; showError = true }
+            return
+        }
         await MainActor.run { isLoading = true; error = nil }
-        let cleanPhone = phoneNumber.filter { $0.isNumber }
-        let finalPhone = cleanPhone.hasPrefix("7") ? "+\(cleanPhone)" : "+7\(cleanPhone)"
         do {
             let response = try await NetworkService.shared.verifySMS(
                 phone: finalPhone, code: smsCode)

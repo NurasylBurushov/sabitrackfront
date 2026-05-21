@@ -62,16 +62,26 @@ class NetworkService {
         case 401:
             throw NetworkError.unauthorized
         default:
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let detail = obj["detail"] {
-                let msg: String
-                if let s = detail as? String { msg = s }
-                else if let arr = detail as? [String] { msg = arr.joined(separator: ", ") }
-                else { msg = "Ошибка сервера" }
-                throw NetworkError.serverError(msg)
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let detail = obj["detail"] {
+                    let msg: String
+                    if let s = detail as? String { msg = s }
+                    else if let arr = detail as? [String] { msg = arr.joined(separator: ", ") }
+                    else { msg = "Ошибка сервера" }
+                    throw NetworkError.serverError(msg)
+                }
+                if let msg = obj["message"] as? String, !msg.isEmpty {
+                    let code = obj["code"] as? Int ?? httpResponse.statusCode
+                    throw NetworkError.serverError("Сервер (\(code)): \(msg)")
+                }
+            }
+            if httpResponse.statusCode == 404 {
+                throw NetworkError.serverError(
+                    "API недоступен (404). Проверьте URL сервера в NetworkService — Railway-приложение могло быть удалено или переименовано."
+                )
             }
             let errorData = try? JSONDecoder().decode(ErrorResponse.self, from: data)
-            throw NetworkError.serverError(errorData?.message ?? "Ошибка сервера")
+            throw NetworkError.serverError(errorData?.message ?? "Ошибка сервера (\(httpResponse.statusCode))")
         }
     }
     
