@@ -180,6 +180,11 @@ class NetworkService {
         try await request(endpoint: "/api/chats")
     }
     
+    /// Открыть чат с няней (родитель). Удобно для проверки с двух телефонов.
+    func startChat(withNannyId nannyId: String) async throws -> ChatListItem {
+        try await request(endpoint: "/api/chats/start", method: "POST", body: ["nanny_id": nannyId])
+    }
+    
     func fetchMessages(chatId: String) async throws -> [Message] {
         try await request(endpoint: "/api/chats/\(chatId)/messages")
     }

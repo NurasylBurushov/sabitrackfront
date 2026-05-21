@@ -38,6 +38,18 @@ struct ProfileView: View {
                             }
                         }
                         Text(authVM.user?.name ?? "Пользователь").font(.system(size: 22, weight: .bold)).foregroundColor(.textPrimary)
+                        if let role = authVM.user?.role {
+                            Text(role == "nanny" ? "Роль в аккаунте: няня" : "Роль в аккаунте: родитель")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.peachPrimary)
+                        }
+                        if AuthViewModel.isIncompleteProfile(authVM.user) {
+                            Text("Заполните имя в разделе «Редактировать» или перезайдите — появится экран регистрации.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 16)
+                        }
                         HStack(spacing: 16) {
                             Label(authVM.user?.email ?? "—", systemImage: "envelope.fill").font(.system(size: 13)).foregroundColor(.textSecondary)
                             if let phone = authVM.user?.phone { Label(phone, systemImage: "phone.fill").font(.system(size: 13)).foregroundColor(.textSecondary) }
@@ -416,7 +428,7 @@ struct CompleteProfileView: View {
             showLocalError = true
             return
         }
-        guard !trimmed.hasPrefix("Пользователь") else {
+        guard !trimmed.lowercased().hasPrefix("пользователь") else {
             localError = "Укажите настоящее имя, а не «Пользователь …»."
             showLocalError = true
             return

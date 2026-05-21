@@ -4,6 +4,14 @@ struct HomeView: View {
     @EnvironmentObject var authVM: AuthViewModel
     @State private var showNannySelection = false // Переменная для открытия выбора няни
     
+    private var displayName: String {
+        let n = authVM.user?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if AuthViewModel.isIncompleteProfile(authVM.user) {
+            return "укажите имя в профиле"
+        }
+        return n.isEmpty ? "Пользователь" : n
+    }
+    
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
@@ -13,7 +21,7 @@ struct HomeView: View {
                         Text("Здравствуйте,")
                             .font(.system(size: 14))
                             .foregroundColor(.textSecondary)
-                        Text(authVM.user?.name ?? "Пользователь")
+                        Text(displayName)
                             .font(.system(size: 22, weight: .bold))
                             .foregroundColor(.textPrimary)
                     }

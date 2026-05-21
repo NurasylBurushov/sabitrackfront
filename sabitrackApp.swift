@@ -9,7 +9,11 @@ struct SabiTrackApp: App {
         WindowGroup {
             Group {
                 if authVM.isAuthenticated {
-                    MainTabView()
+                    if authVM.needsProfileCompletion {
+                        CompleteProfileView()
+                    } else {
+                        MainTabView()
+                    }
                 } else {
                     AuthFlowView()
                 }

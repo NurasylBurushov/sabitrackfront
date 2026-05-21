@@ -31,15 +31,28 @@ class AuthViewModel: ObservableObject {
     enum AuthFlow { case signIn, signUp }
     enum AuthMethod { case email, phone, google, apple }
     
-    /// После SMS или без имени — показываем экран «Как вас зовут?» (как после Google/регистрации).
+    /// После SMS или без имени — показываем экран завершения регистрации.
     var needsProfileCompletion: Bool {
-        guard let u = user else { return true }
+        Self.isIncompleteProfile(user)
+    }
+    
+    /// Пустое / автогенерируемое имя («Пользователь 8141» и т.п.).
+    static func isIncompleteProfile(_ u: UserProfile?) -> Bool {
+        guard let u else { return true }
         if u.profileCompleted == false { return true }
         if u.profileCompleted == true { return false }
         let n = u.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if n.count < 2 { return true }
-        if n.hasPrefix("Пользователь") { return true }
+        let lower = n.lowercased()
+        if lower.hasPrefix("пользователь") { return true }
+        if lower == "user" || lower == "guest" { return true }
         return false
+    }
+    
+    private func clearLocalRoleIfProfileIncomplete() {
+        if Self.isIncompleteProfile(user) {
+            UserDefaults.standard.removeObject(forKey: "userRole")
+        }
     }
     
     init() {
@@ -199,7 +212,10 @@ class AuthViewModel: ObservableObject {
     func loadProfile() async {
         do {
             let profile = try await NetworkService.shared.fetchProfile()
-            await MainActor.run { self.user = profile }
+            await MainActor.run {
+                self.user = profile
+                self.clearLocalRoleIfProfileIncomplete()
+            }
         } catch {
             await MainActor.run {
                 self.isAuthenticated = false
@@ -232,6 +248,7 @@ class AuthViewModel: ObservableObject {
         if self.user == nil {
             self.user = response.user
         }
+        clearLocalRoleIfProfileIncomplete()
     }
     
     @MainActor
